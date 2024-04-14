@@ -1,0 +1,153 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+metadata:
+  name: ${CLUSTER_NAME}
+  region: ap-northeast-1
+  version: "${K8S_VERSION}"
+  tags:
+    app: ${CLUSTER_NAME}
+kubernetesNetworkConfig: 
+  serviceIPv4CIDR: ${SVC_CIDR}
+iam:
+  withOIDC: true
+  serviceAccounts:
+    # Create IAM Role fo Service Account for AWS Load Balancer Controller
+    - metadata:
+        name: aws-load-balancer-controller
+        namespace: kube-system
+      wellKnownPolicies:
+        awsLoadBalancerController: true
+  # Optional: Use pod identity for AWS Load Balancer Controller instead of IRSA
+  # podIdentityAssociations: 
+  #   - namespace:
+  #     serviceAccountName: aws-load-balancer-controller
+  #     attachPolicyARNs: 
+  #       - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+accessConfig:
+  authenticationMode: API_AND_CONFIG_MAP
+  # Whether to grant k8s cluster admin right to cluster creator
+  bootstrapClusterCreatorAdminPermissions: true
+  accessEntries: 
+    - principalARN: ${CLUSTER_ADMIN}
+      type: STANDARD
+      accessPolicies: 
+        # Grant k8s cluster admin right to other IAM role/user (principalARN above)
+        - policyARN: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+          accessScope:
+            type: cluster
+vpc:
+  clusterEndpoints:
+    publicAccess: false
+    privateAccess: true
+  id: "${VPC_ID}"
+  securityGroup: "${SG_ID}"
+  # Configure subnets for Control plane ENIs
+  controlPlaneSubnetIDs: 
+    - ${PRI_SUBNET_1}
+    - ${PRI_SUBNET_2}
+    - ${PRI_SUBNET_3}
+  # Configure subnets for data plane (nodes)
+  subnets:
+    public:
+      public-${AZ1}:
+        id: ${PUB_SUBNET_1}
+      public-${AZ2}:
+        id: ${PUB_SUBNET_2}
+      public-${AZ3}:
+        id: ${PUB_SUBNET_3}
+    private:
+      private-${AZ1}:
+        id: ${PRI_SUBNET_1}
+      private-${AZ2}:
+        id: ${PRI_SUBNET_2}
+      private-${AZ3}:
+        id: ${PRI_SUBNET_3}
+cloudWatch:
+  clusterLogging:
+    enableTypes:
+    - api
+    - audit
+    - authenticator
+    - controllerManager
+    - scheduler
+    logRetentionInDays: 30
+# Optional: encrypt k8s secrets by KMS
+# secretsEncryption: 
+#   keyARN: ""
+addons:
+  - name: vpc-cni
+    version: v1.16.3-eksbuild.2
+    attachPolicyARNs: 
+      - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+    resolveConflicts: overwrite
+    configurationValues: |-
+      env:
+        ENABLE_PREFIX_DELEGATION: "true"
+        AWS_VPC_K8S_CNI_CUSTOM_NETWORK_CFG: "true"
+        ENI_CONFIG_LABEL_DEF: "topology.kubernetes.io/zone"
+  - name: kube-proxy
+    version: v1.29.0-eksbuild.1
+    resolveConflicts: overwrite
+  - name: eks-pod-identity-agent
+    version: v1.2.0-eksbuild.1
+    resolveConflicts: overwrite
+  - name: coredns
+    version: v1.11.1-eksbuild.4
+    resolveConflicts: overwrite
+  - name: aws-mountpoint-s3-csi-driver
+    version: v1.4.0-eksbuild.1
+    resolveConflicts: overwrite
+    attachPolicy:
+      Statement:
+        - Effect: Allow
+          Sid: MountpointFullBucketAccess
+          Action:
+          - s3:ListBucket
+          Resource: '*'
+        - Effect: Allow
+          Sid: MountpointFullObjectAccess
+          Action:
+          - s3:GetObject
+          - s3:PutObject
+          - s3:AbortMultipartUpload
+          - s3:DeleteObject
+          Resource: '*'
+        - Effect: Allow
+          Sid: ExpressOneZoneAccess
+          Action:
+          - s3express:CreateSession
+          Resource: '*'
+  - name: aws-efs-csi-driver
+    version: v1.7.6-eksbuild.1
+    resolveConflicts: overwrite
+    wellKnownPolicies:
+      efsCSIController: true
+  - name: aws-ebs-csi-driver
+    version: v1.28.0-eksbuild.1
+    resolveConflicts: overwrite
+    wellKnownPolicies:
+      ebsCSIController: true
+  # - name: adot
+  #   version: v0.92.1-eksbuild.1
+  #   resolveConflicts: overwrite
+  # - name: amazon-cloudwatch-observability
+managedNodeGroups:
+  - name: ${NODEGROUP}
+    amiFamily: AmazonLinux2
+    instanceType: c6i.large
+    minSize: 0
+    desiredCapacity: 0
+    maxSize: 3
+    volumeSize: 50
+    volumeType: gp3
+    privateNetworking: true
+    subnets:
+    - private-${AZ1}
+    - private-${AZ2}
+    - private-${AZ3}
+    ssh:
+      allow: true
+      publicKeyName: ${SSH_KEY_NAME}
+    tags:
+      app: eksctl-${CLUSTER_NAME}
+    propagateASGTags: true
